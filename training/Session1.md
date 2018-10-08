@@ -45,13 +45,12 @@ kcachegrind <filename>
 ### IPC / Cycles
 ```
 sudo perf stat ./serial_base_debug ../img/small/
+```
 
 #### Preguntas
 
 * ¿Qué diferencias hay entre el profile del serial_base_debug serial_base_debug_O2?
 * ¿Por qué el IPC es mayor que 1 si ejecutamos codigo serie?
-
-```
 
 ### Análisis de la memoria cache
 
