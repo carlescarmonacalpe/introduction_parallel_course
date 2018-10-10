@@ -1,6 +1,6 @@
 #include <string>
 #include <iostream>
-
+#include <omp.h>
 // 3rd Party Libraries
 #include <boost/filesystem.hpp>
 #include <opencv2/opencv.hpp>
@@ -34,14 +34,14 @@ cv::Mat averageFilter(const cv::Mat &input_image){
   unsigned char *input_ptr = (unsigned char*)(input_image_extra_border.data);
   unsigned char *output_ptr = (unsigned char*)(output_image.data);
 
-  for(int i = 1;i < input_image.cols;i++){
-    for(int j = 1;j < input_image.rows;j++){
+  for(int i = 1;i < input_image.rows;i++){
+    for(int j = 1;j < input_image.cols;j++){
 
       int average = 0 ;
       for (int k = 0; k < 9; ++k)
-          average += input_ptr[input_image_extra_border.step * j + i + offset[k]];
+          average += input_ptr[input_image_extra_border.step * i + j + offset[k]];
       average = average / 9;
-      output_ptr[output_image.step * (j - 1) + (i - 1)] = (unsigned char) average;
+      output_ptr[output_image.step * (i - 1) + (j - 1)] = (unsigned char) average;
     }
   }
 
@@ -56,17 +56,44 @@ cv::Mat averageFilter(const cv::Mat &input_image){
 cv::Mat* rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
 
   //Pointers
-  unsigned char *input_ptr = (unsigned char*)(input_image.data);
-  unsigned char *output_ptr = (unsigned char*)(output_image.data);
+  //const unsigned char *input_ptr = (const unsigned char*)(input_image.data);
+  const uchar* input_ptr = (const uchar*)(input_image.data);
+  const uchar* output_ptr = (const uchar*)(output_image.data);
+  //unsigned char *output_ptr = (unsigned char*)(output_image.data);
+  unsigned char b;
+  unsigned char g;
+  unsigned char r;
+  int tid;
 
-  for(int i = 0;i < input_image.cols;i++){
-    for(int j = 0;j < input_image.rows;j++){
-        unsigned char b = input_ptr[input_image.step * j + (i * 3) ] ;
-        unsigned char g = input_ptr[input_image.step * j + (i * 3) + 1];
-        unsigned char r = input_ptr[input_image.step * j + (i * 3) + 2];
-        output_ptr[output_image.step * j + i] =  0.21 * r + 0.72 * g + 0.07 * b;
+
+  std::cout << "Input image:" << input_image.cols << std::endl;
+  __m128i ssse3_red_indeces_0 = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, 12, 9, 6, 3, 0);
+  __m128i ssse3_red_indeces_1 = _mm_set_epi8(-1, -1, -1, -1, -1, 14, 11, 8, 5, 2, -1, -1, -1, -1, -1, -1);
+  __m128i ssse3_red_indeces_2 = _mm_set_epi8(13, 10, 7, 4, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+  __m128i ssse3_green_indeces_0 = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13, 10, 7, 4, 1);
+  __m128i ssse3_green_indeces_1 = _mm_set_epi8(-1, -1, -1, -1, -1, 15, 12, 9, 6, 3, 0, -1, -1, -1, -1, -1);
+  __m128i ssse3_green_indeces_2 = _mm_set_epi8(14, 11, 8, 5, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+  __m128i ssse3_blue_indeces_0 = _mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 14, 11, 8, 5, 2);
+  __m128i ssse3_blue_indeces_1 = _mm_set_epi8(-1, -1, -1, -1, -1, -1, 13, 10, 7, 4, 1, -1, -1, -1, -1, -1);
+  __m128i ssse3_blue_indeces_2 = _mm_set_epi8(15, 12, 9, 6, 3, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+
+  for(int i = 0;i < output_image.rows;i++){
+    for(int j = 0;j < (output_image.cols*3) - 48
+      ;j+=48){
+        const __m128i chunk0 = _mm_loadu_si128((const __m128i*)(input_ptr));
+        const __m128i chunk1 = _mm_loadu_si128((const __m128i*)(input_ptr + 16));
+        const __m128i chunk2 = _mm_loadu_si128((const __m128i*)(input_ptr + 32));
+        const __m128i green = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(chunk0, ssse3_green_indeces_0),
+        _mm_shuffle_epi8(chunk1, ssse3_green_indeces_1)), _mm_shuffle_epi8(chunk2, ssse3_green_indeces_2));
+        _mm_store_si128((__m128i*)(output_ptr), green);
+
+        input_ptr += 48;
+        output_ptr += 16;
     }
+    
   }
+
+  std::cout << "OUT" << std::endl;
 
 }
 
@@ -85,7 +112,7 @@ cv::Mat processImage(const cv::Mat &input_image){
   
   // Average Filter
   averaged_image = averageFilter(input_image_gray);
-  return averaged_image;
+  return input_image_gray;
 
 }
 
@@ -106,12 +133,9 @@ void processImages(std::vector<directory_entry> filenames){
   }
 
   // Process images
-  auto i = std::begin(imagesToProcess);
-  int num_image=0;
-  while (i != std::end(imagesToProcess)) {
-      cv::imwrite(std::to_string(num_image) + "output.tiff", processImage(*i));
-      i = imagesToProcess.erase(i);
-      num_image++;
+  for(int i=0; i< imagesToProcess.size(); i++){
+    cv::imwrite(std::to_string(i) + "output.tiff", processImage(imagesToProcess[i]));
+    imagesToProcess.erase(imagesToProcess.begin() + i);
   }
 }
 

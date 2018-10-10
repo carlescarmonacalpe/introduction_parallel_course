@@ -1,6 +1,6 @@
 #include <string>
 #include <iostream>
-
+#include <omp.h>
 // 3rd Party Libraries
 #include <boost/filesystem.hpp>
 #include <opencv2/opencv.hpp>
@@ -34,14 +34,14 @@ cv::Mat averageFilter(const cv::Mat &input_image){
   unsigned char *input_ptr = (unsigned char*)(input_image_extra_border.data);
   unsigned char *output_ptr = (unsigned char*)(output_image.data);
 
-  for(int i = 1;i < input_image.cols;i++){
-    for(int j = 1;j < input_image.rows;j++){
+  for(int i = 1;i < input_image.rows;i++){
+    for(int j = 1;j < input_image.cols;j++){
 
       int average = 0 ;
       for (int k = 0; k < 9; ++k)
-          average += input_ptr[input_image_extra_border.step * j + i + offset[k]];
+          average += input_ptr[input_image_extra_border.step * i + j + offset[k]];
       average = average / 9;
-      output_ptr[output_image.step * (j - 1) + (i - 1)] = (unsigned char) average;
+      output_ptr[output_image.step * (i - 1) + (j - 1)] = (unsigned char) average;
     }
   }
 
@@ -58,13 +58,21 @@ cv::Mat* rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
   //Pointers
   unsigned char *input_ptr = (unsigned char*)(input_image.data);
   unsigned char *output_ptr = (unsigned char*)(output_image.data);
+  unsigned char b;
+  unsigned char g;
+  unsigned char r;
+  int tid;
 
-  for(int i = 0;i < input_image.cols;i++){
-    for(int j = 0;j < input_image.rows;j++){
-        unsigned char b = input_ptr[input_image.step * j + (i * 3) ] ;
-        unsigned char g = input_ptr[input_image.step * j + (i * 3) + 1];
-        unsigned char r = input_ptr[input_image.step * j + (i * 3) + 2];
-        output_ptr[output_image.step * j + i] =  0.21 * r + 0.72 * g + 0.07 * b;
+  
+  #pragma omp parallel for private(b,g,r,tid) schedule(static)
+  for(int i = 0;i < input_image.rows;i++){
+    tid = omp_get_thread_num();
+    printf("Processing col %d with thread = %d\n", i, tid);
+    for(int j = 0;j < input_image.cols;j++){
+        b = input_ptr[input_image.step * i + (j * 3) ] ;
+        g = input_ptr[input_image.step * i + (j * 3) + 1];
+        r = input_ptr[input_image.step * i + (j * 3) + 2];
+        output_ptr[output_image.step * i + j] =  0.21 * r + 0.72 * g + 0.07 * b;
     }
   }
 
@@ -106,12 +114,9 @@ void processImages(std::vector<directory_entry> filenames){
   }
 
   // Process images
-  auto i = std::begin(imagesToProcess);
-  int num_image=0;
-  while (i != std::end(imagesToProcess)) {
-      cv::imwrite(std::to_string(num_image) + "output.tiff", processImage(*i));
-      i = imagesToProcess.erase(i);
-      num_image++;
+  for(int i=0; i< imagesToProcess.size(); i++){
+    cv::imwrite(std::to_string(i) + "output.tiff", processImage(imagesToProcess[i]));
+    imagesToProcess.erase(imagesToProcess.begin() + i);
   }
 }
 
