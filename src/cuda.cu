@@ -6,6 +6,8 @@
 #include <opencv2/opencv.hpp>
 #include <chrono>
 
+
+
 using namespace boost::filesystem;
 
 /*! Convert the specified image to grayscale.  
@@ -54,7 +56,7 @@ cv::Mat averageFilter(const cv::Mat &input_image){
     \param input_image Image to process.
     \param input_image Output image.
 */  
-cv::Mat* rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
+void rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
 
   //Pointers
   unsigned char *input_ptr = (unsigned char*)(input_image.data);
@@ -71,6 +73,41 @@ cv::Mat* rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
 
 }
 
+__global__ void rgb2gray_ver2(unsigned char * d_src, unsigned char * d_dst, int width, int height)
+{
+    int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (pos_x >= (width * height))
+        return;
+
+    unsigned char b = d_src[(pos_x * 3)];
+    unsigned char g = d_src[(pos_x * 3) + 1];
+    unsigned char r = d_src[(pos_x * 3) + 2];
+
+    unsigned int _gray = (unsigned int)((float)(0.21 * r + 0.72 * g + 0.07 * b));
+    unsigned char gray = _gray > 255 ? 255 : _gray;
+
+    d_dst[pos_x] = gray;
+}
+
+__global__ void rgb2gray_ver1(unsigned char * d_src, unsigned char * d_dst, int width, int height)
+{
+    int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int pos_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (pos_x >= width || pos_y >= height )
+        return;
+
+    unsigned char b = d_src[pos_y * (width * 3) + (pos_x * 3)];
+    unsigned char g = d_src[pos_y * (width * 3) + (pos_x * 3) + 1];
+    unsigned char r = d_src[pos_y * (width * 3) + (pos_x * 3) + 2];
+
+    unsigned int _gray = (unsigned int)((float)(0.21 * r + 0.72 * g + 0.07 * b));
+    unsigned char gray = _gray > 255 ? 255 : _gray;
+
+    d_dst[pos_y * width + pos_x] = gray;
+}
+
 /*! Process the specified image. First convert the image from rgb to grayscale, and 
     after this apply and average filter of size 3x3.  
     \param input_image Image to process.
@@ -80,13 +117,50 @@ cv::Mat processImage(const cv::Mat &input_image){
 
   cv::Mat input_image_gray(cv::Size(input_image.cols, input_image.rows), CV_8UC1);
   cv::Mat averaged_image;
-
+  
+  unsigned char *d_src;
+  unsigned char *d_dst;
+  
   auto start = std::chrono::steady_clock::now();
-  // Convert RGB to Grayscale
-  rgb2gray(input_image, input_image_gray);
+  cudaMalloc((void**)&d_src, input_image.cols * input_image.rows * 3 *sizeof(unsigned char));
+  cudaMalloc((void**)&d_dst,input_image.cols * input_image.rows * sizeof(unsigned char));
+  cudaMemcpy(d_src, input_image.data, input_image.cols * input_image.rows * 3 *sizeof(unsigned char), cudaMemcpyHostToDevice);
   auto end = std::chrono::steady_clock::now();
+  std::cout<< "Transfer time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
+
+  //Launch the kernel
+  start = std::chrono::steady_clock::now();
+  
+  dim3 blkDim (32, 32, 1);
+  dim3 grdDim ((input_image.cols + 31)/32, (input_image.rows + 31)/32, 1);
+  rgb2gray_ver1<<<grdDim, blkDim>>>(d_src, d_dst, input_image.cols, input_image.rows);
+
+  //Ver2
+  /*
+  int blockSize;      // The launch configurator returned block size 
+  int minGridSize;    // The minimum grid size needed to achieve the maximum occupancy for a full device launch 
+  int gridSize;       // The actual grid size needed, based on input siz
+  cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, rgb2gray_ver2, 0, (input_image.cols * input_image.rows)); 
+  // Round up according to array size 
+  gridSize = ((input_image.cols * input_image.rows) + blockSize - 1) / blockSize; 
+  rgb2gray_ver2<<<gridSize, blockSize>>>(d_src, d_dst, input_image.cols, input_image.rows);
+  */
+  //Wait until kernel finishes
+  cudaDeviceSynchronize();
+  end = std::chrono::steady_clock::now();
   std::cout<< "Processing time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
 
+  //copy back the result to CPU
+  start = std::chrono::steady_clock::now();
+  cudaMemcpy(input_image_gray.data, d_dst, input_image.cols * input_image.rows * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+  end = std::chrono::steady_clock::now();
+  std::cout<< "Transfer time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
+  cudaFree(d_src);
+  cudaFree(d_dst);
+
+  // Convert RGB to Grayscale
+  //rgb2gray(input_image, input_image_gray);
+  
   // Average Filter
   averaged_image = averageFilter(input_image_gray);
   return averaged_image;
