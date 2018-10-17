@@ -73,6 +73,34 @@ void rgb2gray(const cv::Mat &input_image, cv::Mat &output_image){
 
 }
 
+__global__ void boxFilter3x3_ver1 (unsigned char * srcD, unsigned char * dstD, int width, int height){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y>=height)
+      return;
+
+    int widthSrc = width + 2;
+    int heightSrc = height + 2;
+
+    int sum = 0
+
+
+    unsigned char i0, i1, i2, i3, i4, i5, i6, i7, i8;
+    i0 = srcD[widthSrc * y + x];
+    i1 = srcD[widthSrc * y + x + 1];
+    i2 = srcD[widthSrc * y + x + 2];
+    i3 = srcD[widthSrc * (y + 1) + x];
+    i4 = srcD[widthSrc * (y + 1) + x + 1];
+    i5 = srcD[widthSrc * (y + 1) + x + 2];
+    i6 = srcD[widthSrc * (y + 2) + x];
+    i7 = srcD[widthSrc * (y + 2) + x + 1];
+    i8 = srcD[widthSrc * (y + 2) + x + 2];
+
+    dstD[y * width + x] = (i0 + i1 + i2 + i3 + i4 + i5 + i6 + i7 + i8 ) / 9;
+
+}
+
 __global__ void rgb2gray_ver2(unsigned char * d_src, unsigned char * d_dst, int width, int height)
 {
     int pos_x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -122,17 +150,24 @@ cv::Mat processImage(const cv::Mat &input_image){
   unsigned char *d_dst;
   
   auto start = std::chrono::steady_clock::now();
+
+  // Memory allocation
   cudaMalloc((void**)&d_src, input_image.cols * input_image.rows * 3 *sizeof(unsigned char));
-  cudaMalloc((void**)&d_dst,input_image.cols * input_image.rows * sizeof(unsigned char));
+  cudaMalloc((void**)&d_dst, input_image.cols * input_image.rows * sizeof(unsigned char));
+
+  // Copy src image to device
   cudaMemcpy(d_src, input_image.data, input_image.cols * input_image.rows * 3 *sizeof(unsigned char), cudaMemcpyHostToDevice);
+  
   auto end = std::chrono::steady_clock::now();
   std::cout<< "Transfer time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
 
   //Launch the kernel
   start = std::chrono::steady_clock::now();
   
+  //Scheme definition
   dim3 blkDim (32, 32, 1);
   dim3 grdDim ((input_image.cols + 31)/32, (input_image.rows + 31)/32, 1);
+
   rgb2gray_ver1<<<grdDim, blkDim>>>(d_src, d_dst, input_image.cols, input_image.rows);
 
   //Ver2
@@ -145,8 +180,10 @@ cv::Mat processImage(const cv::Mat &input_image){
   gridSize = ((input_image.cols * input_image.rows) + blockSize - 1) / blockSize; 
   rgb2gray_ver2<<<gridSize, blockSize>>>(d_src, d_dst, input_image.cols, input_image.rows);
   */
+
   //Wait until kernel finishes
   cudaDeviceSynchronize();
+
   end = std::chrono::steady_clock::now();
   std::cout<< "Processing time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
 
@@ -155,6 +192,8 @@ cv::Mat processImage(const cv::Mat &input_image){
   cudaMemcpy(input_image_gray.data, d_dst, input_image.cols * input_image.rows * sizeof(unsigned char), cudaMemcpyDeviceToHost);
   end = std::chrono::steady_clock::now();
   std::cout<< "Transfer time "<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms"<<std::endl;
+  
+  // Free memory
   cudaFree(d_src);
   cudaFree(d_dst);
 
